@@ -9,9 +9,10 @@
 using namespace cv;
 using namespace std;
 
-class Homework : public rclcpp::Node{
+class Worker : public rclcpp::Node{
 private:
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_subscribe;
+    rclcpp::Publisher<geometry_msgs::msg::Point32>::SharedPtr point_publisher;
     rclcpp::Time last_fire_time;
     rclcpp::Time last_image_time;
     Point gun_pos;
@@ -20,7 +21,7 @@ private:
     KalmanTracker kft_tar;
     KalmanTracker kft_fri;
 private:
-    inline bool check_team_fuc(const Mat& work_image){
+    bool check_team_fuc(const Mat& work_image){
         static bool check_team = false;
         static bool res_team = false;
         if(!check_team){
@@ -33,7 +34,7 @@ private:
         return res_team;
     }
 private:
-    inline void find_targets_fuc(const Mat& work_image,const bool my_team,vector<Point>& my_targets,vector<Point>& my_friends){
+    void find_targets_fuc(const Mat& work_image,const bool my_team,vector<Point>& my_targets,vector<Point>& my_friends){
         Mat gray_image;
         cvtColor(work_image,gray_image,CV_BGR2GRAY);
         threshold(gray_image,gray_image,100,255,CV_THRESH_BINARY_INV);
@@ -68,19 +69,40 @@ private:
                     cnt_b += bgr[0];cnt_r += bgr[2];
                     if(check_color(bgr,145,145,145,5))gray_tag = true;
                 }
-            if(gray_tag)continue;
-
-            if((cnt_b > cnt_r) != my_team){
+            if(gray_tag){
+                int tmp = kft_tar.point_matching(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
+                if(tmp != -1){
+                    my_targets.push_back(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
+                    kft_tar.health_ope(tmp);
+                }else my_friends.push_back(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
+            
+            }else if((cnt_b > cnt_r) != my_team){
                 my_targets.push_back(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
             }else{
                 my_friends.push_back(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
             }
         }
+
+        // kft_tar.auto_remove();
     }
 public:
-    Homework(string port_name):Node("worker_node"),serial_port(std::make_unique<Serialport>(port_name,115200)){
+    Worker():Node("worker_node"){
+        this->declare_parameter<std::string>("serial","/dev/pts/2");
+        this->declare_parameter<bool>("debug",false);
+        this->declare_parameter<vector<double>>("health_impact_factor",{1e7,1.0,0.7,0.2});
+
+        std::string port_name = this->get_parameter("serial").as_string();
+        bool debug = this->get_parameter("debug").as_bool();
+        auto factor = this->get_parameter("health_impact_factor").as_double_array();
+        set_debug(debug);
+        set_health_impact_factor(factor.data());
+
+        serial_port = std::make_unique<Serialport>(port_name,115200);
+
         image_subscribe = this->create_subscription<sensor_msgs::msg::Image>
-        ("/image_raw",10,bind(&Homework::image_callback,this,placeholders::_1));
+        ("/image_raw",10,bind(&Worker::image_callback,this,placeholders::_1));
+        point_publisher = this->create_publisher<geometry_msgs::msg::Point32>
+        ("/target_point",10);
 
         last_fire_time = this->now();
         last_image_time = this->now();
@@ -88,7 +110,7 @@ public:
         gun_pos = Point(576,612);
     }
 private:
-    inline void image_callback(const sensor_msgs::msg::Image::SharedPtr msg){
+    void image_callback(const sensor_msgs::msg::Image::SharedPtr msg){
         cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(*msg,sensor_msgs::image_encodings::BGR8);
         Mat read_image = cv_ptr->image;
         if(read_image.empty()){
@@ -118,51 +140,72 @@ private:
         kft_tar.updata(my_targets,dt_image);
         auto res_tar = kft_tar.get_data();
 
-        if(res_tar.empty())return;
+        if(!res_tar.empty()){
+            vector<pair<Point,Point>>friend_lines;
+            friend_lines.clear();
 
-        vector<pair<Point,Point>>friend_lines;
-        friend_lines.clear();
-
-        current_time = this->now();
-        if(!res_fri.empty()){
+            current_time = this->now();
             for(auto & target : res_fri)
                 cal_pre_line(target,gun_pos,(current_time - last_image_time).seconds(),friend_lines);
-        }
 
-        double min_dist = 1e6;
-        Point select_target = Point(0,0);
-        for(auto& target : res_tar){
-            Point cal_tar_tmp = cal_pre_tar(target,gun_pos,(current_time - last_image_time).seconds());
-            
-            bool line_tag = false;
-            if(!res_fri.empty()){
+            double min_dist = 1e9 + 10;
+            Point select_target = Point(0,0);
+            for(auto& target : res_tar){
+                Point cal_tar_tmp = cal_pre_tar(target,gun_pos,(current_time - last_image_time).seconds());
+                if(!check_scope(cal_tar_tmp,1152,648))continue;
+
+                bool line_tag = false;
                 for(auto & line : friend_lines)
                     line_tag |= check_cross(gun_pos,cal_tar_tmp,line.first,line.second);
-            }
-            if(line_tag)continue;
+                if(line_tag)continue;
 
-            double tmp_dist = dis_point_Euc(gun_pos,cal_tar_tmp);
-            if(tmp_dist < min_dist){
-                min_dist = tmp_dist;
-                select_target = cal_tar_tmp;
+                double tmp_dist = dis_point_Euc(gun_pos,cal_tar_tmp) * health_impact_factor[target.health];
+                if(tmp_dist < min_dist){
+                    min_dist = tmp_dist;
+                    select_target = cal_tar_tmp;
+                }
+            }
+            if(min_dist < 1e9){
+                current_time = this->now();
+                if((current_time - last_fire_time).seconds() > 0.16){
+                    //计算角度
+                    double angle = cal_angle(select_target,gun_pos);
+                    send_angle_com(angle);
+
+                    send_fire_com();
+                    last_fire_time = current_time;
+                
+                    geometry_msgs::msg::Point32 pub;
+                    pub.x = select_target.x;
+                    pub.y = select_target.y;
+                    point_publisher->publish(pub);
+                }
+            }
+
+            if(IS_DEBUG && min_dist < 1e9){
+                circle(read_image,select_target,3,Scalar(255,0,255),-1);
+                cv::line(read_image,gun_pos,expand_line(gun_pos,select_target),Scalar(255,0,255));
+                for(auto &line : friend_lines)
+                    cv::line(read_image,line.first,line.second,Scalar(255,0,255));
             }
         }
-        if(select_target.x == 0 && select_target.y == 0)return;
 
-        current_time = this->now();
-        if((current_time - last_fire_time).seconds() > 0.1){
-            //计算角度
-            double angle = cal_angle(select_target,gun_pos);
-            send_angle_com(angle);
-
-            send_fire_com();
-            send_fire_com();
-            send_fire_com();
-            last_fire_time = current_time;
+        if(IS_DEBUG){
+            for(auto &target : res_fri){
+                circle(read_image,target.pos,3,Scalar(255,0,255),-1);
+            }
+            for(auto &target : res_tar){
+                circle(read_image,target.pos,3,Scalar(0,255,0),-1);
+                char s[1];s[0] = '0' + target.health;
+                putText(read_image,s,target.pos,FONT_HERSHEY_COMPLEX,
+                        1,Scalar(255,255,255));
+            }
+            imshow("DisPlay image",read_image);
+            waitKey(15);
         }
     }
 
-    inline void send_angle_com(const double angle){
+    void send_angle_com(const double angle){
         uint8_t buffer[5];
         buffer[0] = 0x01;
         float angle_f = static_cast<float>(angle);
@@ -170,7 +213,7 @@ private:
         serial_port->write(buffer,5);
     }
     
-    inline void send_fire_com(){
+    void send_fire_com(){
         uint8_t buffer[1] = {0x02};
         serial_port->write(buffer, 1);
     }

@@ -12,20 +12,22 @@ const int cont_size = 0;
 
 const float kQPos = 1e-5f;   // 位置噪声
 const float kQVel = 1e-4f;   // 速度噪声
-const float kQAcc = 1e-3f;   // 加速度噪声
+const float kQAcc = 1e-2f;   // 加速度噪声
 
-const float kRPos = 1e-2f;   // 测量噪声
+const float kRPos = 1e-3f;   // 测量噪声
 
 struct Target{
     int id,lost_count;
     KalmanFilter kf;
     Point pos,vel,acc;
+    int health;
     double dt;
 
     Target(int _id,const Point& init_pos,double _dt = 1.0){
         id = _id;
         lost_count = 0;
         dt = _dt;
+        health = 3;
         kf = KalmanFilter(state_size,meas_size,cont_size,CV_32F);
         
         // 状态转移矩阵 A
@@ -113,7 +115,7 @@ private:
     double match_dis_threshold;
     double dt;
 
-    inline void target_matching(const vector<Point>& poses,
+    void target_matching(const vector<Point>& poses,
                         vector<pair<int,int>>& matches,
                         vector<int>& unmatched_pos,
                         vector<int>& unmatched_tar){
@@ -152,7 +154,7 @@ private:
     }
     inline void auto_remove(){
         targets.erase(remove_if(targets.begin(),targets.end(),
-        [this](const Target& t){return t.lost_count > max_lost_count;}),targets.end());
+        [this](const Target& t){return (t.lost_count > max_lost_count || t.health < 0);}),targets.end());
     }
 public:
     KalmanTracker(double _dt = 1.0){
@@ -169,7 +171,23 @@ public:
         dt = 0.0;
         targets.clear();
     }
-    inline void updata(const vector<Point>& poses,double _dt = 1.0){
+    int point_matching(const Point point){
+        double min_dist = match_dis_threshold;
+        int n_tar =targets.size();
+        int best_match = -1;
+        for(int j = 0;j < n_tar;j++){
+            double tmp_dist = dis_point_Euc(point,targets[j].pos);
+            if(tmp_dist < min_dist){
+                min_dist = tmp_dist;
+                best_match = j;
+            }
+        }
+        return best_match;
+    }
+    void health_ope(int id){
+        targets[id].health--;
+    }
+    void updata(const vector<Point>& poses,double _dt = 1.0){
         dt = _dt;
         for(auto& target : targets)
             target.predict(dt);
@@ -193,8 +211,6 @@ public:
         auto_remove();
     }
     inline vector<Target> get_data()const{return targets;}
-
-    inline void set_dt(double _dt){dt = _dt;}
 };
 
 #endif

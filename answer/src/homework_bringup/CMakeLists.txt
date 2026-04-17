@@ -1,36 +1,17 @@
 cmake_minimum_required(VERSION 3.8)
-project(worker)
+project(homework_bringup)
 
-set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
 
 # find dependencies
-set(AMENT_DEPENDENCIES
-  rclcpp
-  cv_bridge
-  sensor_msgs
-  OpenCV
-  # homework_msg
-)
-
-foreach (AMENT_DEPENDENCY ${AMENT_DEPENDENCIES})
-    find_package(${AMENT_DEPENDENCY} REQUIRED)
-endforeach ()
-
-
-add_executable(${PROJECT_NAME}_node src/main.cpp)
-target_link_libraries(${PROJECT_NAME}_node ${OpenCV_LIBRARIES})
-ament_target_dependencies(${PROJECT_NAME}_node ${AMENT_DEPENDENCIES})
-target_include_directories(${PROJECT_NAME}_node PUBLIC
-        include
-        msg_serializer)
-
-install(TARGETS ${PROJECT_NAME}_node
-        DESTINATION lib/${PROJECT_NAME})
-
+find_package(ament_cmake REQUIRED)
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
+install(DIRECTORY launch/
+  DESTINATION share/${PROJECT_NAME}/launch)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

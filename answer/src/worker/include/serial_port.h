@@ -74,7 +74,7 @@ public:
         if (written != static_cast<ssize_t>(size)) {
             throw std::runtime_error("Serial write error");
         }
-        usleep(size * 500);
+        usleep(size * 1000);
     }
 };
 

@@ -17,8 +17,16 @@
 #include <bits/stdc++.h>
 #include <rclcpp/rclcpp.hpp>
 
-const bool IS_DEBUG = true;
-
+bool IS_DEBUG = false;
+inline void set_debug(bool tag){
+    IS_DEBUG = tag;
+}
+double health_impact_factor[4] = {1e7,1.0,0.7,0.2};
+inline void set_health_impact_factor(double* factor){
+    for(int i = 0;i < 4;i++){
+        health_impact_factor[i] = factor[i];
+    }
+}
 using namespace std;
 using namespace cv;
 
@@ -84,4 +92,10 @@ inline bool check_cross(const Point l1_1,const Point l1_2,const Point l2_1,const
 
     return (cp1 * cp2 <= 0 && cp3 * cp4 <= 0);
 } 
+inline Point expand_line(const Point p1,const Point p2){
+    double dx = p1.x - p2.x;
+    double dy = p1.y - p2.y;
+    Point res(p1.x - ((dx * p1.y) / dy),0);
+    return res;
+}
 #endif
