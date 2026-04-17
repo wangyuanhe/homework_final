@@ -30,7 +30,7 @@ def generate_launch_description():
             parameters=[
                 {'serial': port_name},
                 {'debug': debug_name},
-                {'health_impact_factor':[1e7,1.0,0.7,0.2]}
+                {'health_impact_factor':[1e7,1.0,0.7,0.1]}
             ]
         ),
         Node(

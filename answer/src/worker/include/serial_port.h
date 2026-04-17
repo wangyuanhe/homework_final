@@ -76,6 +76,18 @@ public:
         }
         usleep(size * 1000);
     }
+    void send_angle_com(const double angle){
+        uint8_t buffer[5];
+        buffer[0] = 0x01;
+        float angle_f = static_cast<float>(angle);
+        memcpy(buffer + 1,&angle_f,4);
+        write(buffer,5);
+    }
+    
+    void send_fire_com(){
+        uint8_t buffer[1] = {0x02};
+        write(buffer, 1);
+    }
 };
 
 #endif

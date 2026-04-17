@@ -16,17 +16,8 @@
 #include <memory>
 #include <bits/stdc++.h>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp/parameter_event_handler.hpp>
 
-bool IS_DEBUG = false;
-inline void set_debug(bool tag){
-    IS_DEBUG = tag;
-}
-double health_impact_factor[4] = {1e7,1.0,0.7,0.2};
-inline void set_health_impact_factor(double* factor){
-    for(int i = 0;i < 4;i++){
-        health_impact_factor[i] = factor[i];
-    }
-}
 using namespace std;
 using namespace cv;
 

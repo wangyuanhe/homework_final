@@ -16,86 +16,57 @@ private:
     rclcpp::Time last_fire_time;
     rclcpp::Time last_image_time;
     Point gun_pos;
-    unique_ptr<Serialport> serial_port;
 
     KalmanTracker kft_tar;
     KalmanTracker kft_fri;
-private:
-    bool check_team_fuc(const Mat& work_image){
-        static bool check_team = false;
-        static bool res_team = false;
-        if(!check_team){
-            check_team = true;
-            Vec3b bgr = work_image.at<Vec3b>(gun_pos.y,gun_pos.x);
-            res_team = bgr[0] > bgr[2];
-            RCLCPP_INFO(this->get_logger(),"MY TEAM IS %d",res_team);
 
-        }
-        return res_team;
-    }
-private:
-    void find_targets_fuc(const Mat& work_image,const bool my_team,vector<Point>& my_targets,vector<Point>& my_friends){
-        Mat gray_image;
-        cvtColor(work_image,gray_image,CV_BGR2GRAY);
-        threshold(gray_image,gray_image,100,255,CV_THRESH_BINARY_INV);
+    bool check_team = false;
 
-        vector<vector<Point>> contours;
-        vector<Vec4i> hierarcy;
-        findContours(gray_image,contours,hierarcy,CV_RETR_EXTERNAL,CV_CHAIN_APPROX_NONE);
+    bool IS_DEBUG = false;
+    vector<double> health_impact_factor = {1e7,1.0,0.7,0.1};
+    unique_ptr<Serialport> serial_port;
 
-        my_friends.clear();
-        my_targets.clear();
-
-        for(int i = 0;i < contours.size();i++){
-            Rect boundRect = boundingRect(Mat(contours[i]));
-            
-            Point top_left = boundRect.tl(); 
-            Point bottom_right = boundRect.br();
-
-            if(bottom_right.x - top_left.x < 64)continue;
-            if(bottom_right.y > 612)continue;
-
-            int cnt_b = 0,cnt_r = 0;
-            bool gray_tag = false;
-            for(int cl = top_left.x;cl <= min(top_left.x + 5,1151);cl++)
-                for(int rw = top_left.y;rw <= bottom_right.y;rw++){
-                    Vec3b bgr = work_image.at<Vec3b>(rw,cl);
-                    cnt_b += bgr[0];cnt_r += bgr[2];
-                    if(check_color(bgr,145,145,145,5))gray_tag = true;
-                }
-            for(int cl = max(bottom_right.x - 5,0);cl <= bottom_right.x;cl++)
-                for(int rw = top_left.y;rw <= bottom_right.y;rw++){
-                    Vec3b bgr = work_image.at<Vec3b>(rw,cl);
-                    cnt_b += bgr[0];cnt_r += bgr[2];
-                    if(check_color(bgr,145,145,145,5))gray_tag = true;
-                }
-            if(gray_tag){
-                int tmp = kft_tar.point_matching(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
-                if(tmp != -1){
-                    my_targets.push_back(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
-                    kft_tar.health_ope(tmp);
-                }else my_friends.push_back(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
-            
-            }else if((cnt_b > cnt_r) != my_team){
-                my_targets.push_back(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
-            }else{
-                my_friends.push_back(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
-            }
-        }
-
-        // kft_tar.auto_remove();
-    }
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
 public:
     Worker():Node("worker_node"){
+        param_callback_handle_ = this->add_on_set_parameters_callback(
+            [this](const std::vector<rclcpp::Parameter> &params) {
+                for (const auto &p : params) {
+                    if (p.get_name() == "health_impact_factor" && 
+                        p.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY) {
+                        health_impact_factor = p.as_double_array();
+                        RCLCPP_INFO(this->get_logger(), 
+                            "health_impact_factor changed = %f,%f,%f,%f",
+                            health_impact_factor[0], health_impact_factor[1],
+                            health_impact_factor[2], health_impact_factor[3]);
+                    }
+                    if (p.get_name() == "debug" && 
+                        p.get_type() == rclcpp::ParameterType::PARAMETER_BOOL) {
+                        IS_DEBUG = p.as_bool();
+                        RCLCPP_INFO(this->get_logger(), "debug changed = %d", IS_DEBUG);
+                    }
+                    if (p.get_name() == "serial" && 
+                        p.get_type() == rclcpp::ParameterType::PARAMETER_STRING) {
+                        std::string port_name = p.as_string();
+                        serial_port = std::make_unique<Serialport>(port_name, 115200);
+                        check_team = false;
+                        RCLCPP_INFO(this->get_logger(), "\033[2J\033[1;1H");
+                        RCLCPP_INFO(this->get_logger(), "serial changed = %s", port_name.c_str());
+                    }
+                }
+                rcl_interfaces::msg::SetParametersResult result;
+                result.successful = true;
+                return result;
+            }
+        );
+
         this->declare_parameter<std::string>("serial","/dev/pts/2");
         this->declare_parameter<bool>("debug",false);
-        this->declare_parameter<vector<double>>("health_impact_factor",{1e7,1.0,0.7,0.2});
+        this->declare_parameter<vector<double>>("health_impact_factor",{1e7,1.0,0.7,0.1});
 
         std::string port_name = this->get_parameter("serial").as_string();
-        bool debug = this->get_parameter("debug").as_bool();
-        auto factor = this->get_parameter("health_impact_factor").as_double_array();
-        set_debug(debug);
-        set_health_impact_factor(factor.data());
+        IS_DEBUG = this->get_parameter("debug").as_bool();
+        health_impact_factor = this->get_parameter("health_impact_factor").as_double_array();
 
         serial_port = std::make_unique<Serialport>(port_name,115200);
 
@@ -170,9 +141,9 @@ private:
                 if((current_time - last_fire_time).seconds() > 0.16){
                     //计算角度
                     double angle = cal_angle(select_target,gun_pos);
-                    send_angle_com(angle);
+                    serial_port->send_angle_com(angle);
+                    serial_port->send_fire_com();
 
-                    send_fire_com();
                     last_fire_time = current_time;
                 
                     geometry_msgs::msg::Point32 pub;
@@ -204,18 +175,65 @@ private:
             waitKey(15);
         }
     }
+    bool check_team_fuc(const Mat& work_image){
+        static bool res_team = false;
+        if(!check_team){
+            check_team = true;
+            Vec3b bgr = work_image.at<Vec3b>(gun_pos.y,gun_pos.x);
+            res_team = bgr[0] > bgr[2];
+            RCLCPP_INFO(this->get_logger(),"MY TEAM IS %d",res_team);
 
-    void send_angle_com(const double angle){
-        uint8_t buffer[5];
-        buffer[0] = 0x01;
-        float angle_f = static_cast<float>(angle);
-        memcpy(buffer + 1,&angle_f,4);
-        serial_port->write(buffer,5);
+        }
+        return res_team;
     }
-    
-    void send_fire_com(){
-        uint8_t buffer[1] = {0x02};
-        serial_port->write(buffer, 1);
+    void find_targets_fuc(const Mat& work_image,const bool my_team,vector<Point>& my_targets,vector<Point>& my_friends){
+        Mat gray_image;
+        cvtColor(work_image,gray_image,CV_BGR2GRAY);
+        threshold(gray_image,gray_image,100,255,CV_THRESH_BINARY_INV);
+
+        vector<vector<Point>> contours;
+        vector<Vec4i> hierarcy;
+        findContours(gray_image,contours,hierarcy,CV_RETR_EXTERNAL,CV_CHAIN_APPROX_NONE);
+
+        my_friends.clear();
+        my_targets.clear();
+
+        for(int i = 0;i < contours.size();i++){
+            Rect boundRect = boundingRect(Mat(contours[i]));
+            
+            Point top_left = boundRect.tl(); 
+            Point bottom_right = boundRect.br();
+
+            if(bottom_right.x - top_left.x < 64)continue;
+            if(bottom_right.y > 612)continue;
+
+            int cnt_b = 0,cnt_r = 0;
+            bool gray_tag = false;
+            for(int cl = top_left.x;cl <= min(top_left.x + 5,1151);cl++)
+                for(int rw = top_left.y;rw <= bottom_right.y;rw++){
+                    Vec3b bgr = work_image.at<Vec3b>(rw,cl);
+                    cnt_b += bgr[0];cnt_r += bgr[2];
+                    if(check_color(bgr,145,145,145,5))gray_tag = true;
+                }
+            for(int cl = max(bottom_right.x - 5,0);cl <= bottom_right.x;cl++)
+                for(int rw = top_left.y;rw <= bottom_right.y;rw++){
+                    Vec3b bgr = work_image.at<Vec3b>(rw,cl);
+                    cnt_b += bgr[0];cnt_r += bgr[2];
+                    if(check_color(bgr,145,145,145,5))gray_tag = true;
+                }
+            if(gray_tag){
+                int tmp = kft_tar.point_matching(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
+                if(tmp != -1){
+                    my_targets.push_back(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
+                    kft_tar.health_ope(tmp);
+                }else my_friends.push_back(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
+            
+            }else if((cnt_b > cnt_r) != my_team){
+                my_targets.push_back(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
+            }else{
+                my_friends.push_back(Point((top_left.x + bottom_right.x) / 2,(top_left.y + bottom_right.y) / 2));
+            }
+        }
     }
 };
 

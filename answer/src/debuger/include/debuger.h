@@ -58,8 +58,8 @@ public:
             dt_image = 0.000;
         }
         last_image_time = current_time;
-        RCLCPP_INFO(this->get_logger(), "============\n");
-        RCLCPP_INFO(this->get_logger(), "dt_image = %lf\n",dt_image);
+        RCLCPP_INFO(this->get_logger(), "============");
+        RCLCPP_INFO(this->get_logger(), "dt_image = %lf",dt_image);
 
         for(auto &i : mem_point){
             circle(read_image,i.first,3,Scalar(0,255,0),-1);
